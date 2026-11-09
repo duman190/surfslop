@@ -1,0 +1,18 @@
+.tiles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-top: 14px; }
+.tile .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .07em; }
+.tile .v { font-size: 30px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.tile .x { color: var(--muted); font-size: 13px; }
+.plot svg { width: 100%; height: auto; display: block; }
+.plot text { fill: var(--muted); font-size: 11px; font-family: inherit; }
+.plot .hit { fill: transparent; }
+.plot .hit:hover { fill: rgb(255 255 255 / .06); }
+.two { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.hbars { display: grid; grid-template-columns: max-content 1fr max-content; gap: 7px 10px; align-items: center; font-size: 14px; }
+.hbars .bar { height: 10px; border-radius: 0 4px 4px 0; background: #3987e5; min-width: 2px; }
+.hbars .n { font-variant-numeric: tabular-nums; color: var(--muted); text-align: right; }
+.empty { color: var(--muted); font-size: 14px; }
+details { margin-top: 10px; font-size: 13px; }
+details summary { color: var(--muted); cursor: pointer; }
+details table { margin-top: 6px; max-width: 420px; }
+.tip { position: fixed; z-index: 9; pointer-events: none; background: #22304c; border: 1px solid var(--line); border-radius: 8px;
+  padding: 5px 9px; font-size: 13px; box-shadow: 0 8px 20px rgb(0 0 0 / .4); font-variant-numeric: tabular-nums; }

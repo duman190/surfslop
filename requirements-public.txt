@@ -1,0 +1,6 @@
+# The portal's one runtime dependency, pinned by hash for the machine that serves the public portal
+# (Python 3.13, macOS arm64). pip refuses any file that doesn't match:
+#   pip install --require-hashes --only-binary=:all: -r requirements-public.txt && pip install --no-deps -e .
+# On another platform or Python, replace the hash with that wheel's (pip download pillow==13.0.0, pip hash).
+pillow==13.0.0 \
+    --hash=sha256:f11a3c1358bb3c68012a7b1f41b223c3db9f7bfde90b481df028cfe1c3363313

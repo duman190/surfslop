@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "surfslop"
+version = "0.1.0"
+description = "Bay Area surf forecast portal for people and agents: several forecasts, fused, served over Tailscale."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = ["Pillow>=10"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+surfslop = "surfslop.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+surfslop = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,23 @@
+# Cloudflare Tunnel for the public portal (PUBLIC.md). Copy to ~/.cloudflared/config.yml and fill in
+# <TUNNEL-UUID> and your domain. The tunnel reaches exactly one thing on this Mac: the public portal on
+# 127.0.0.1:7874 (surfslop serve --public --hostname surf.example.com). Every other host name or path gets
+# a 404 from cloudflared itself, so the private portal (7873), the stats page (7875), the Lynch Pin portal,
+# SSH and anything else listening here stay unreachable.
+tunnel: <TUNNEL-UUID>
+credentials-file: /Users/<you>/.cloudflared/<TUNNEL-UUID>.json
+
+# Homebrew updates cloudflared (brew upgrade cloudflared); its metrics server stays on loopback
+no-autoupdate: true
+metrics: 127.0.0.1:20242
+
+# No private-network routing: never add `cloudflared tunnel route ip ...` (or a CIDR route in the Zero Trust
+# dashboard) for this tunnel, so it never becomes a VPN into this Mac or its network
+
+ingress:
+  - hostname: surf.example.com
+    service: http://127.0.0.1:7874  # 127.0.0.1, not localhost: the portal doesn't listen on ::1
+    originRequest:
+      connectTimeout: 10s
+      noHappyEyeballs: true
+  # Anything else that reaches the tunnel: refused at the tunnel, never forwarded
+  - service: http_status:404

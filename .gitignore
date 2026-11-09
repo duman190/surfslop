@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+.DS_Store
+# Never commit credentials or local state. surfslop needs neither a password nor a token to run.
+.env
+.env.*
+*.token
