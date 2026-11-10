@@ -112,3 +112,24 @@ def test_home_screen_icon_and_manifest(portal):
     manifest = json.loads(body)
     assert status == 200 and headers["Content-Type"].startswith("application/manifest+json")
     assert manifest["display"] == "standalone" and {i["sizes"] for i in manifest["icons"]} == {"192x192", "512x512"}
+
+
+def test_a_reader_that_hangs_up_leaves_no_traceback(capfd):
+    import socket
+    import struct
+    import time
+
+    httpd = server.QuietServer(("127.0.0.1", 0), server.Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        for _ in range(3):                                    # as a phone does when a page closes or it sleeps
+            sock = socket.create_connection(httpd.server_address)
+            sock.sendall(b"GET /v1/spots HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            assert sock.recv(64).startswith(b"HTTP/1.1 200")
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))   # close with a reset
+            sock.close()
+        time.sleep(0.5)
+        assert fetch(f"http://127.0.0.1:{httpd.server_address[1]}/v1/spots")[0] == 200       # still serving
+    finally:
+        httpd.shutdown()
+    assert "Traceback" not in capfd.readouterr().err

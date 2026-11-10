@@ -35,6 +35,7 @@ import json
 import logging
 import mimetypes
 import signal
+import sys
 import threading
 import time
 from collections import deque
@@ -170,10 +171,25 @@ def _int(q: dict, name: str, default: int, lo: int, hi: int) -> int:
         return default
 
 
+class QuietServer(ThreadingHTTPServer):
+    """A reader that hangs up is not an error. Phones drop their kept-alive connections whenever a
+    page is closed, the app goes to the background or the phone sleeps; Python's server prints a
+    traceback for each one. Those are left out of the log; anything else is still logged."""
+
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        kind = sys.exc_info()[0]
+        if kind is not None and issubclass(kind, (ConnectionError, TimeoutError)):
+            return
+        log.exception("a request from %s failed", client_address[0])
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = f"surfslop/{__version__}"
     portal = Portal()
+    timeout = 120  # seconds an idle kept-alive connection may stay open before its thread is released
 
     def log_message(self, fmt, *args):  # the default writes every request to stderr
         pass
@@ -461,8 +477,7 @@ def hosts_for(listen: str) -> list:
 
 
 def _start(host: str, port: int, handler) -> ThreadingHTTPServer:
-    httpd = ThreadingHTTPServer((host, port), handler)
-    httpd.daemon_threads = True
+    httpd = QuietServer((host, port), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd
 
