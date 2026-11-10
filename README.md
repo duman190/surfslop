@@ -70,15 +70,41 @@ rest carry on.
    many independent families (Surfline, surf-forecast, NWS, the Open-Meteo models) agree.
 3. **Wind** is a weighted circular mean of the spot-level winds. Against the direction the
    spot faces it becomes offshore / cross / onshore, then **clean / fair / blown**.
-4. **Calibration.** While Surfline is on, each other source is compared with it over the
-   hours both cover; the median ratio per spot is remembered (`calibration.json`) and applied
-   from then on. It corrects a source's level at that spot, not its shape, and it carries
-   Surfline-like numbers into days 6-8, past Surfline's own five days.
+4. **Calibration.** While Surfline is on, each open-ocean source (NWS, the wave models) is
+   compared with it over the hours both cover; the median ratio per spot is remembered
+   (`calibration.json`) and applied from then on. It corrects how this portal brings ocean
+   swell to that spot, not the shape of the forecast, and it carries Surfline-like numbers
+   into days 6-8, past Surfline's own five days. surf-forecast.com forecasts the break
+   itself, so its numbers are left as it gives them.
 5. **Stars** (0-5) weigh size, swell period and wind; the day's best period is named.
 
 Days 1-5 have every source; days 6-8 are wave models only, and say so through a lower
 confidence. Without Surfline the first-guess exposures stand; on 9 Nov 2026 they put the
 seven poll spots within a foot or two of what surfline.com showed that day.
+
+### Hour by hour
+
+![The hourly panels for one day](docs/hour-by-hour.jpg)
+
+Every hour of the week also carries, from the fused data:
+
+| | |
+|---|---|
+| **Swell at sea** | The open-ocean swell: a main train and, when there is one, a second. NWS's and the three wave models' trains are matched by direction, then height and period are weighted means. Surfline's and surf-forecast.com's swells are given for points of their own near the break, so they count through their surf heights instead. |
+| **Wind** | Speed, gusts and direction at the spot, and what that makes of the surface. |
+| **Tide** | NOAA's prediction, with each high and low. |
+| **Wave energy** | kJ per metre of crest in one wave, ρg²H²T²/16π: at sea for the fused swell, and at the break, scaled by how much of that swell's height the fused surf says arrives. |
+| **Consistency** | 0-100, our own estimate of how steadily rideable waves arrive, not Surfline's number: higher for bigger surf, lower for long-period swell (long lulls between sets), a little higher when a second swell fills the lulls (`surf.consistency`). |
+| **Weather** | Air temperature and sky at the spot, with sunrise and sunset per day (Open-Meteo). |
+
+The spot page draws these as stacked panels for one day at a time, at the page's real width
+so they read on a phone; the ‹ › buttons or the week strip switch the day, and a panel with
+no data for that day is left out. The row above the panels shows the hour under the
+crosshair, and a table of the day sits underneath. Agents get the same as a 48-hour table
+in the Markdown forecast, and every field in the JSON (`hours[]`).
+
+On an iPhone, Share → Add to Home Screen gives the portal its own icon and opens it full
+screen.
 
 ### Written overview (local AI)
 
@@ -106,12 +132,17 @@ Every morning at 4:00 Pacific (`daily_at` in `config.json`) the running portal m
 page's seven spots ready before anyone asks:
 
 1. it reads Surfline for each of them, slowly (about half an hour for the seven);
-2. it refreshes the open sources and builds each spot's fused week;
-3. the local model writes each spot's overview and the regional "where to go".
+2. it refreshes the open sources (swell, wind, weather, sun times, tides) and builds each
+   spot's fused week hour by hour: surf, swell, wind, tide, wave energy, consistency, weather;
+3. it keeps that whole hourly forecast on disk as the day's edition
+   (`cache/edition/<spot>.json`);
+4. the local model writes each spot's overview and the regional "where to go".
 
-Everything lands in the ordinary caches, so the first page view of the day and Muse's Friday
-job read finished work, and the overviews stand for the day. During the day the cheap open
-sources keep refreshing (wind and swell models update hourly); Surfline is not asked again.
+Everything also lands in the ordinary caches, so the first page view of the day and Muse's
+Friday job read finished work, and the overviews stand for the day. During the day the cheap
+open sources keep refreshing (wind and swell models update hourly); Surfline is not asked
+again. If no source can be reached later on, a spot's page is served from the saved edition
+for up to 36 hours.
 
 If the portal wasn't running at 4, the edition is built when it starts (or when a sleeping
 laptop wakes). A spot that isn't on the home page, or whose morning read failed, isn't left
