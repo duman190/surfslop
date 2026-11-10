@@ -203,3 +203,20 @@ def test_openmeteo_weather_and_sun_come_with_the_wind():
     assert "temperature_2m" in openmeteo._wind_url() and "sunrise" in openmeteo._wind_url()
     net._cache_file(openmeteo._wind_url()).unlink()
     assert openmeteo.spot_weather(spot) == {"hours": {}, "sun": []}          # unreachable: no weather, nothing breaks
+
+
+def test_openmeteo_keeps_the_wind_for_hours_the_wave_models_do_not_cover():
+    from surfslop.spots import SPOTS
+    spot = BY_ID["pleasure-point"]
+    models = [m for m, _ in openmeteo.MODELS]
+    marine = {"hourly": {"time": [7200, 10800], **{f"{k}_{m}": v for m in models for k, v in {
+        "wave_height": [6.0, 6.0], "wave_direction": [290, 290], "wave_period": [14, 14], "swell_wave_height": [5.0, 5.0],
+        "swell_wave_direction": [290, 290], "swell_wave_period": [14, 14]}.items()}}}
+    wind = {"hourly": {"time": [3600, 7200, 10800], "wind_speed_10m": [4.0, 5.0, 6.0], "wind_gusts_10m": [6.0, 7.0, 8.0],
+                       "wind_direction_10m": [300, 310, 320], "temperature_2m": [60, 61, 62], "weather_code": [0, 0, 0], "is_day": [1, 1, 1]}}
+    net._cache_file(openmeteo._marine_url()).write_bytes(json.dumps([marine] * len(openmeteo._POINTS)).encode())
+    net._cache_file(openmeteo._wind_url()).write_bytes(json.dumps([wind] * len(SPOTS)).encode())
+    gfs = openmeteo.fetch(spot)[0]
+    assert [(p["t"], bool(p["swells"]), p["wind"]) for p in gfs["points"]] == [
+        (3600, False, (4.0, 6.0, 300)), (7200, True, (5.0, 7.0, 310)), (10800, True, (6.0, 8.0, 320))]
+    assert "timezone=America%2FLos_Angeles" in openmeteo._marine_url()      # both requests start at local midnight

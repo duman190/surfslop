@@ -28,7 +28,7 @@ def _marine_url() -> str:
     lon = ",".join(str(p[1]) for p in _POINTS)
     models = ",".join(m for m, _ in MODELS)
     return (f"https://marine-api.open-meteo.com/v1/marine?latitude={lat}&longitude={lon}&hourly={_FIELDS}"
-            f"&models={models}&timeformat=unixtime&forecast_days=8&length_unit=imperial")
+            f"&models={models}&timezone=America%2FLos_Angeles&timeformat=unixtime&forecast_days=8&length_unit=imperial")
 
 
 def _wind_url() -> str:
@@ -105,11 +105,12 @@ def fetch(spot: Spot) -> list:
         res = result(f"openmeteo-{model.split('_')[0]}", f"Open-Meteo · {label}", "https://open-meteo.com/en/docs/marine-weather-api",
                      "ocean", group="openmeteo")
         res["fetched"] = fetched
-        for i, t in enumerate(hourly["time"]):
-            swells = _swells(hourly, model, i)
-            if swells:
+        at = {t: i for i, t in enumerate(hourly["time"])}
+        for t in sorted(set(at) | set(wind)):  # an hour with wind but no swell yet still has its wind
+            swells = _swells(hourly, model, at[t]) if t in at else []
+            if swells or t in wind:
                 res["points"].append({"t": t, "swells": swells, "wind": wind.get(t)})
-        if not res["points"]:
-            res["error"] = "no data for this model right now"
+        if not any(p["swells"] for p in res["points"]):
+            res["points"], res["error"] = [], "no data for this model right now"
         out.append(res)
     return out
