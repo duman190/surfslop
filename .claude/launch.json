@@ -4,14 +4,38 @@
     {
       "name": "surfslop",
       "runtimeExecutable": ".venv/bin/python",
-      "runtimeArgs": ["-m", "surfslop", "serve", "--lan"],
+      "runtimeArgs": [
+        "-m",
+        "surfslop",
+        "serve",
+        "--lan"
+      ],
       "port": 7873
     },
     {
       "name": "surfslop-public",
       "runtimeExecutable": ".venv/bin/python",
-      "runtimeArgs": ["-m", "surfslop", "serve", "--public", "--hostname", "surf.example.com"],
+      "runtimeArgs": [
+        "-m",
+        "surfslop",
+        "serve",
+        "--public",
+        "--hostname",
+        "surf.example.com"
+      ],
       "port": 7874
+    },
+    {
+      "name": "surfslop-dev",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-m",
+        "surfslop",
+        "serve",
+        "--port",
+        "7876"
+      ],
+      "port": 7876
     }
   ]
 }

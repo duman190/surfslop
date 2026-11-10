@@ -4,11 +4,14 @@ At `daily_at` (04:00 Pacific by default) the running portal, for each of the sev
 
   1. asks the Surfline reader for today's copy (private portal only; ten seconds between
      requests, three minutes between spots, so about half an hour for the seven) and waits for it;
-  2. refreshes the open sources and builds the fused week;
-  3. has the local model write the spot's overview, then the regional "where to go".
+  2. refreshes the open sources (swell, wind, weather, sun times, tides) and builds the fused
+     week hour by hour: surf, swell, wind, tide, wave energy, consistency and weather;
+  3. keeps that whole forecast on disk as the day's edition (cache/edition/<spot>.json);
+  4. has the local model write the spot's overview, then the regional "where to go".
 
-Everything lands in the ordinary caches, so the first page view of the day, and Muse's Friday
-job, read finished work. Overviews then stand until the next edition (ai.py).
+Everything also lands in the ordinary caches, so the first page view of the day, and Muse's
+Friday job, read finished work. Overviews then stand until the next edition (ai.py). If the
+sources can't be reached later in the day, the spot's page is served from the saved edition.
 
 If the portal was not running at 4, the edition is built when it starts. A spot that is not on
 the home page, or whose morning read failed, is not left out for the day: opening it queues a
@@ -61,7 +64,7 @@ def run(cfg: config.Config, public: bool = False, stop: threading.Event | None =
     """Build the edition now. Returns what was done, for the log and the tests."""
     stop = stop or threading.Event()
     started, done = time.time(), {"surfline": 0, "spots": 0, "overviews": 0}
-    if not public and cfg.enabled("surfline"):
+    if not public and cfg.enabled("surfline") and surfline.running():  # no reader here (a one-off run): use what is on disk
         for spot in FEATURED:
             surfline.request(spot, force=True)
         deadline = time.time() + SURFLINE_WAIT
@@ -72,6 +75,8 @@ def run(cfg: config.Config, public: bool = False, stop: threading.Event | None =
         if stop.is_set():
             return done
         data = fusion.forecast(spot, cfg, refresh=True, public=public)
+        if data.get("hours"):
+            fusion.save_edition(data)
         done["spots"] += 1
         if ai.write(ai.spot_stream(data, cfg)):
             done["overviews"] += 1

@@ -50,6 +50,7 @@ _SPEED = {"KTS": 1.0, "KPH": KMH_TO_KT, "MPH": 0.868976}
 _queue: list = []
 _forced: set = set()
 _busy: list = []  # the spot being read right now
+_alive: list = []  # non-empty while worker() runs
 _queue_lock = threading.Lock()
 
 
@@ -116,6 +117,11 @@ def pending() -> int:
         return len(_queue) + len(_busy)
 
 
+def running() -> bool:
+    """True while the reader is alive in this process (only the private portal starts it)."""
+    return bool(_alive)
+
+
 def fetch(spot: Spot) -> list:
     """What is on disk for the spot. Never touches the network; queues the spot when it is due."""
     res = result("surfline", "Surfline", page_url(spot), "spot")
@@ -171,6 +177,14 @@ def refresh(spot: Spot, pause: float | None = None, force: bool = False) -> int:
 def worker(stop: threading.Event, enabled, on_read=None) -> None:
     """The one place Surfline is asked for anything. Runs in the portal for as long as it is up.
     `on_read(spot)` is called after a spot has been read, so its forecast can be rebuilt."""
+    _alive.append(True)
+    try:
+        _read_queue(stop, enabled, on_read)
+    finally:
+        _alive.clear()
+
+
+def _read_queue(stop: threading.Event, enabled, on_read) -> None:
     while not stop.is_set():
         with _queue_lock:
             spot = _queue.pop(0) if _queue and enabled() and not net.blocked(HOST) else None

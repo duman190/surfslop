@@ -62,3 +62,24 @@ def test_spot_catalog():
     assert find("Surfer's Beach").id == "half-moon-bay" and find("steamer-lane").id == "steamer-lane"
     assert find("nowhere") is None and search("capitola")[0].id == "capitola"
     assert all(0 < x <= 1 for s in SPOTS for x in s.exposure)
+
+
+def test_wave_energy_grows_with_height_and_period_squared():
+    assert surf.wave_energy(6, 14) == pytest.approx(1286, abs=5)            # kJ per metre of crest, one wave
+    assert surf.wave_energy(12, 14) == pytest.approx(4 * surf.wave_energy(6, 14))
+    assert surf.wave_energy(6, 7) == pytest.approx(surf.wave_energy(6, 14) / 4)
+    assert surf.wave_energy(0, 14) == 0 and surf.wave_energy(6, None) == 0
+
+
+def test_consistency_is_higher_for_bigger_surf_and_lower_for_long_lulls():
+    assert surf.consistency(6, 13) == 83 and surf.consistency(1, 13) < 30
+    assert surf.consistency(4, 18) < surf.consistency(4, 11)                # long-period sets come with long lulls
+    assert surf.consistency(3, 9, second_share=0.3) > surf.consistency(3, 9)  # a second swell fills them
+    assert surf.consistency(None, 12) is None and surf.consistency(4, None) is None
+    assert all(0 <= surf.consistency(f, p, s) <= 100 for f in (0, 2, 30) for p in (5, 25) for s in (0, 1))
+
+
+def test_sky_words():
+    assert [surf.sky(c) for c in (0, 1, 2, 3, 45, 53, 63, 73, 80, 95)] == [
+        "clear", "mostly clear", "partly cloudy", "cloudy", "fog", "drizzle", "rain", "snow", "showers", "thunder"]
+    assert surf.sky(None) == ""

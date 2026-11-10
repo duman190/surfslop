@@ -1,7 +1,8 @@
-"""Open-Meteo: three global wave models at each region's offshore point, and the wind at every spot.
+"""Open-Meteo: three global wave models at each region's offshore point, and the wind, weather and
+sun times at every spot.
 
 Free, no key (open-meteo.com). Two requests cover all spots: one marine call for the offshore
-points, one weather call for the spots' wind.
+points, one weather call for the spots' wind, air temperature, sky, sunrise and sunset.
 """
 
 from __future__ import annotations
@@ -34,8 +35,9 @@ def _wind_url() -> str:
     lat = ",".join(f"{s.lat:.4f}" for s in SPOTS)
     lon = ",".join(f"{s.lon:.4f}" for s in SPOTS)
     return (f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
-            "&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m&wind_speed_unit=kn"
-            "&timeformat=unixtime&forecast_days=8")
+            "&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,temperature_2m,weather_code,is_day"
+            "&daily=sunrise,sunset&wind_speed_unit=kn&temperature_unit=fahrenheit"
+            "&timezone=America%2FLos_Angeles&timeformat=unixtime&forecast_days=8")
 
 
 def _swells(hourly: dict, model: str, i: int) -> list:
@@ -58,17 +60,38 @@ def _swells(hourly: dict, model: str, i: int) -> list:
     return trains
 
 
-def spot_wind(spot: Spot) -> dict:
-    """{epoch: (speed_kt, gust_kt, from_deg)} at the spot; {} when the request fails."""
+def _spot_data(spot: Spot) -> dict | None:
     try:
         data, _ = net.get_json(_wind_url(), ttl=TTL)
     except net.FetchError:
-        return {}
+        return None
     data = data if isinstance(data, list) else [data]
-    hourly = data[SPOTS.index(spot)]["hourly"]
+    return data[SPOTS.index(spot)]
+
+
+def spot_wind(spot: Spot) -> dict:
+    """{epoch: (speed_kt, gust_kt, from_deg)} at the spot; {} when the request fails."""
+    data = _spot_data(spot)
+    if not data:
+        return {}
+    hourly = data["hourly"]
     return {t: (s, g, d) for t, s, g, d in zip(hourly["time"], hourly["wind_speed_10m"],
                                                hourly["wind_gusts_10m"], hourly["wind_direction_10m"])
             if s is not None and d is not None}
+
+
+def spot_weather(spot: Spot) -> dict:
+    """{"hours": {epoch: (temp_f, wmo_code, is_day)}, "sun": [(sunrise, sunset), …]} at the spot;
+    empty when the request fails."""
+    data = _spot_data(spot)
+    if not data:
+        return {"hours": {}, "sun": []}
+    hourly, daily = data["hourly"], data.get("daily") or {}
+    hours = {t: (temp, code, bool(day)) for t, temp, code, day in zip(
+        hourly["time"], hourly.get("temperature_2m") or [], hourly.get("weather_code") or [], hourly.get("is_day") or [])
+        if temp is not None}
+    sun = [(rise, down) for rise, down in zip(daily.get("sunrise") or [], daily.get("sunset") or []) if rise and down]
+    return {"hours": hours, "sun": sun}
 
 
 @guarded

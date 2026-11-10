@@ -48,7 +48,11 @@ from .sources import surfline
 
 log = logging.getLogger("surfslop")
 STATIC = Path(__file__).parent / "static"
-PAGE_FILES = {"index.html", "app.js", "app.css", "icon.svg"}
+PAGE_FILES = {"index.html", "app.js", "app.css", "icon.svg", "apple-touch-icon.png", "icon-192.png", "icon-512.png",
+              "manifest.webmanifest"}
+# Where phones and browsers look for an icon without being told.
+ROOT_ICONS = {"/apple-touch-icon.png": "apple-touch-icon.png", "/apple-touch-icon-precomposed.png": "apple-touch-icon.png",
+              "/favicon.ico": "icon-192.png"}
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
@@ -323,6 +327,9 @@ class Handler(BaseHTTPRequestHandler):
         if parts[0] == "static" and len(parts) == 2:
             self.kind = "page"
             return self.static(parts[1])
+        if path in ROOT_ICONS:
+            self.kind = "page"
+            return self.static(ROOT_ICONS[path])
         if path in ("/llms.txt", "/v1", "/v1/help"):
             return self.markdown(GUIDE)
         if path == "/v1/status":
@@ -410,10 +417,10 @@ class Handler(BaseHTTPRequestHandler):
     def static(self, name: str) -> None:
         if name not in PAGE_FILES:
             return self.error(404, "not_found", "no such file")
-        kind = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        kind = "application/manifest+json" if name.endswith(".webmanifest") else mimetypes.guess_type(name)[0] or "application/octet-stream"
         if kind.startswith("text/") or kind.endswith(("javascript", "json")):
             kind += "; charset=utf-8"
-        self.reply(200, (STATIC / name).read_bytes(), kind, cache="no-cache")
+        self.reply(200, (STATIC / name).read_bytes(), kind, cache="max-age=86400" if kind.startswith("image/png") else "no-cache")
 
     def status_data(self, cfg: config.Config) -> dict:
         data = fusion.forecast(spots.FEATURED[0], cfg, public=self.portal.public)

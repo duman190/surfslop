@@ -189,3 +189,17 @@ def test_surfline_answers_with_nulls_or_surprises_never_break_the_page():
         net._cache_file(surfline._url(kind, spot, hourly)).write_bytes(json.dumps(body).encode())
     res = surfline.fetch(spot)[0]
     assert res["points"] == [] and "couldn't read Surfline's answer" in res["error"]
+
+
+def test_openmeteo_weather_and_sun_come_with_the_wind():
+    from surfslop.spots import SPOTS
+    spot = BY_ID["pleasure-point"]
+    one = {"hourly": {"time": [100, 3700], "wind_speed_10m": [5.0, None], "wind_gusts_10m": [8.0, 9.0], "wind_direction_10m": [300, 310],
+                      "temperature_2m": [61.4, None], "weather_code": [2, 3], "is_day": [1, 0]},
+           "daily": {"time": [0], "sunrise": [24000], "sunset": [61000]}}
+    net._cache_file(openmeteo._wind_url()).write_bytes(json.dumps([one] * len(SPOTS)).encode())
+    assert openmeteo.spot_wind(spot) == {100: (5.0, 8.0, 300)}
+    assert openmeteo.spot_weather(spot) == {"hours": {100: (61.4, 2, True)}, "sun": [(24000, 61000)]}
+    assert "temperature_2m" in openmeteo._wind_url() and "sunrise" in openmeteo._wind_url()
+    net._cache_file(openmeteo._wind_url()).unlink()
+    assert openmeteo.spot_weather(spot) == {"hours": {}, "sun": []}          # unreachable: no weather, nothing breaks

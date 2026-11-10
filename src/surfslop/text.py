@@ -86,6 +86,21 @@ def forecast_md(data: dict, ai: str | None = None) -> str:
         quality = " / ".join((d["periods"].get(n) or {}).get("quality") or "?" for n in ("morning", "midday", "afternoon"))
         size = d["surf"] + (f" ({d['caution']})" if d.get("caution") else "")
         lines.append(f"| {d['label']} | {size} | {d['stars']}/5 | {d.get('best') or '–'} | {d.get('swell', '–')} | {quality} | {d['confidence']} |")
+    lines += ["", "## Hour by hour, next 48 hours (fused, every 3 hours)", "",
+              "| Time | Surf (ft) | Swell at sea | Wind | Tide (ft) | Energy at the break / at sea (kJ) | Consistency | Weather |",
+              "|---|---|---|---|---|---|---|---|"]
+    start = (data.get("now") or data["hours"][0])["t"]
+    for h in data["hours"]:
+        if not start - 3600 <= h["t"] < start + 48 * 3600 or int(h["time"][11:13]) % 3 or h["surf_min"] is None:
+            continue
+        swell = f"{h['swells'][0]['height']} ft @ {int(h['swells'][0]['period'])} s {h['swells'][0]['from']}" if h.get("swells") else "–"
+        wind = f"{int(h['wind']['speed'])} kt {h['wind']['from']} {h['wind']['type']}" if h.get("wind") else "–"
+        energy = f"{h['energy']['nearshore']} / {h['energy']['offshore']}" if h.get("energy") else "–"
+        sky = f"{h['weather']['temp_f']}°F {h['weather']['sky']}" if h.get("weather") else "–"
+        when_ = datetime.fromtimestamp(h["t"], ZoneInfo(TZ)).strftime("%a %-I %p")
+        lines.append(f"| {when_} | {surf.surf_text(h['surf_min'], h['surf_max'])} | {swell} | {wind} | "
+                     f"{h['tide'] if h.get('tide') is not None else '–'} | {energy} | "
+                     f"{h['consistency'] if h.get('consistency') is not None else '–'} | {sky} |")
     lines += ["", "## Each source, per day (wave face, ft)", ""]
     ids = [s["id"] for s in data["sources"] if s["ok"]]
     lines += ["| Day | Fused | " + " | ".join(SHORT.get(i, i) for i in ids) + " |", "|---|---|" + "---|" * len(ids)]
@@ -95,7 +110,10 @@ def forecast_md(data: dict, ai: str | None = None) -> str:
     lines += ["", "## Wind and tides", ""]
     for d in data["days"]:
         tides = ", ".join(f"{t['type']} {t['time']} {t['height']} ft" for t in d["tides"])
-        lines.append(f"- **{d['label']}**: {_periods(d)}. Tides ({data.get('tide_station', '')}): {tides or 'n/a'}.")
+        extra = "".join([f" Sunrise {d['sun']['sunrise']}, sunset {d['sun']['sunset']}." if d.get("sun") else "",
+                         f" Air {d['weather']['low']}-{d['weather']['high']}°F, {d['weather']['sky']}." if d.get("weather") else "",
+                         f" Wave energy at the break {d['energy']} kJ, consistency {d['consistency']}/100." if d.get("energy") is not None and d.get("consistency") is not None else ""])
+        lines.append(f"- **{d['label']}**: {_periods(d)}. Tides ({data.get('tide_station', '')}): {tides or 'n/a'}.{extra}")
     notes = [(d["label"], SHORT.get(sid, sid), v["note"]) for d in data["days"] for sid, v in d["by_source"].items() if v.get("note")]
     if notes:
         lines += ["", "## Forecaster notes", ""] + [f"- {label} ({who}): {note}" for label, who, note in notes]
@@ -135,8 +153,10 @@ def ai_block(data: dict) -> str:
     lines.append("DAILY (fused surf in ft of wave face | swell | surface by time of day | tides | confidence | each source):")
     for d in data["days"]:
         tides = ", ".join(f"{t['type']} {t['time']} {t['height']}ft" for t in d["tides"])
+        more = (f" | consistency {d['consistency']}/100" if d.get("consistency") is not None else "") + (
+            f" | air {d['weather']['low']}-{d['weather']['high']}F {d['weather']['sky']}" if d.get("weather") else "")
         lines.append(f"{d['label']}: {d['surf']} ft{' (' + d['caution'] + ')' if d.get('caution') else ''} | {d.get('swell', 'n/a')} | {_periods(d)} | {tides} | "
-                     f"confidence {d['confidence']} | {_by_source(d)}")
+                     f"confidence {d['confidence']} | {_by_source(d)}{more}")
     labels = {d["date"]: d["label"] for d in data["days"]}
     writeups = [w for w in data.get("writeups", []) if w["day"] is None or w["day"] in labels]
     if writeups:

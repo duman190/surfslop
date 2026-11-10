@@ -201,46 +201,130 @@ function overlay(spot, hour) {
   return g;
 }
 
-function chart(d, shown, sel, pick) {
-  const W = 1000, H = 330, L = 34, R = 8, T = 10, B = 78, n = d.hours.length, tideH = 40;
-  const x = (i) => L + i / (n - 1) * (W - L - R);
-  let top = 2;
-  d.hours.forEach(h => { if (h.surf_max > top) top = h.surf_max; });
-  for (const id of shown) (d.source_hours[id] || []).forEach(v => { if (v > top) top = v; });
-  const step = [1, 2, 5, 10, 20].find(s => top / s <= 6) || 20;
-  top = Math.ceil(top * 1.08 / step) * step;
-  const y = (v) => T + (1 - v / top) * (H - T - B);
-  const g = svg('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Hourly wave height for the week: fused range and each source' });
-  for (let i = 0; i < n; i += 24) {                               // nights and day labels
-    g.append(svg('rect', { x: x(i), y: T, width: x(6) - x(0), height: H - T - B, fill: '#000', opacity: .22 }),
-      svg('rect', { x: x(i + 18), y: T, width: x(Math.min(i + 24, n - 1)) - x(i + 18), height: H - T - B, fill: '#000', opacity: .22 }),
-      svg('line', { x1: x(i), x2: x(i), y1: T, y2: H - 20, stroke: '#23314c' }),
-      svg('text', { x: x(Math.min(i + 12, n - 1)), y: H - 6, 'text-anchor': 'middle' }, fmt({ weekday: 'short', day: 'numeric' }).format(new Date(d.hours[i].t * 1000))));
+/* The hourly panels for one day, stacked on one time axis: surf (fused range and each source),
+   wind, tide, swell, wave energy, consistency, weather. Drawn at the page's real width, so the text
+   stays readable on a phone. Everything fused is one hue (FUSED); only the surf panel's source
+   lines carry their own colours. One crosshair runs through all panels; the readout above shows
+   the selected hour, and a table of the day sits underneath. */
+const FUSED = '#40c4ff', GRID = '#23314c', INK = '#e9eff8', MUTE = '#8c9ab0';
+const STRIP = { clean: '#34c759', fair: '#ffcc00', blown: '#ff9500' };
+function glyph(x, y, bearing, color, size) {                      // a small arrow pointing along `bearing`
+  const k = size / 5;
+  return svg('path', { d: `M0,${-5 * k} L${3 * k},${2.5 * k} L0,${k} L${-3 * k},${2.5 * k} Z`, fill: color, transform: `translate(${x.toFixed(1)},${y.toFixed(1)}) rotate(${bearing})` });
+}
+function skyIcon(x, y, w) {                                       // sun, moon, cloud, rain… about 14 px
+  const g = svg('g', { transform: `translate(${x.toFixed(1)},${y})` }), sky = w.sky;
+  const cloud = (dx, dy, c) => svg('path', { d: `M${dx - 6},${dy + 3} a3.2,3.2 0 0 1 1.200,-6.200 a4.200,4.200 0 0 1 8,1 a2.700,2.700 0 0 1 -0.500,5.200 z`, fill: c });
+  const orb = (dx, dy, r) => w.night ? svg('path', { d: `M${dx + 1},${dy - r} a${r},${r} 0 1 0 ${r - 1},${r + 1} a${r * .8},${r * .8} 0 0 1 ${-(r - 1)},${-(r + 1)} z`, fill: '#c8d2e0' })
+    : svg('circle', { cx: dx, cy: dy, r, fill: '#ffd60a' });
+  if (sky === 'clear' || sky === 'mostly clear') g.append(orb(0, 0, 4.5));
+  else if (sky === 'partly cloudy') g.append(orb(-2.5, -2, 3.6), cloud(1.500, 1, MUTE));
+  else if (sky === 'fog') [-3, 0, 3].forEach(dy => g.append(svg('line', { x1: -6, x2: 6, y1: dy, y2: dy, stroke: MUTE, 'stroke-width': 1.6, 'stroke-linecap': 'round' })));
+  else {
+    g.append(cloud(0, -1, MUTE));
+    if (sky === 'drizzle' || sky === 'rain' || sky === 'showers' || sky === 'thunder')
+      [-3, 0.500, 4].forEach(dx => g.append(svg('line', { x1: dx, x2: dx - 1.200, y1: 4, y2: 7.500, stroke: FUSED, 'stroke-width': 1.5, 'stroke-linecap': 'round' })));
+    if (sky === 'thunder') g.append(svg('path', { d: 'M1,2 l-3,4 h2.500 l-1.500,3.500 l4,-5 h-2.500 z', fill: '#ffd60a' }));
+    if (sky === 'snow') [-3, 0.500, 4].forEach(dx => g.append(svg('circle', { cx: dx, cy: 6, r: 1.100, fill: INK })));
   }
-  for (let v = 0; v <= top; v += step) g.append(svg('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: '#23314c' }),
-    svg('text', { x: L - 6, y: y(v) + 4, 'text-anchor': 'end' }, v));
-  g.append(svg('text', { x: L + 4, y: T + 12 }, 'ft'));
-  const runs = (values) => { const out = []; let run = []; values.forEach((v, i) => { if (v == null) { if (run.length) out.push(run); run = []; } else run.push([i, v]); }); if (run.length) out.push(run); return out; };
-  for (const run of runs(d.hours.map(h => h.surf_min == null ? null : [h.surf_min, h.surf_max]))) {   // the fused range
-    const up = run.map(([i, v]) => `${x(i).toFixed(1)},${y(v[1]).toFixed(1)}`), down = run.map(([i, v]) => `${x(i).toFixed(1)},${y(v[0]).toFixed(1)}`).reverse();
-    g.append(svg('polygon', { points: [...up, ...down].join(' '), fill: '#40c4ff', opacity: .3 }),
-      svg('polyline', { points: run.map(([i, v]) => `${x(i).toFixed(1)},${y((v[0] + v[1]) / 2).toFixed(1)}`).join(' '), fill: 'none', stroke: '#e9eff8', 'stroke-width': 2.4, 'stroke-linejoin': 'round' }));
+  return g;
+}
+/* `index` lists the day's hours as positions in d.hours; `sel` and `pick` use those positions too.
+   A panel is drawn only if the day has data for it, and the ones below move up. */
+function chart(d, shown, index, sel, pick, width) {
+  const W = Math.max(Math.round(width), 300), L = 38, R = 8, n = index.length, H = index.map(i => d.hours[i]);
+  const slot = (W - L - R) / n, x = (k) => L + (k + .5) * slot, t0 = H[0].t;
+  const xt = (t) => x(Math.min(Math.max((t - t0) / 3600, -.5), n - .5));
+  const wide = slot >= 22;                                        // room for a number on every third hour
+  const g = svg('svg', { role: 'img', 'aria-label': 'The day hour by hour, from the fused forecast' });
+  const runs = (values) => { const out = []; let run = []; values.forEach((v, k) => { if (v == null) { if (run.length) out.push(run); run = []; } else run.push([k, v]); }); if (run.length) out.push(run); return out; };
+  const line = (values, y, attrs) => runs(values).map(run => svg('polyline', { points: run.map(([k, v]) => `${x(k).toFixed(1)},${y(v).toFixed(1)}`).join(' '), fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', ...attrs }));
+  const nice = (top, max) => { const step = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000].find(s => top / s <= max) || 10000; return [step, Math.ceil(top * 1.06 / step) * step]; };
+  const day = d.days.find(x => x.date === H[0].time.slice(0, 10)) || {};
+  const rise = day.sun ? xt(day.sun.sunrise_t) : x(6), set = day.sun ? xt(day.sun.sunset_t) : x(18);
+  let cursor = 12;                                                // where the next panel starts
+  /* One panel: title, grid with labelled ticks, night shading; returns its y scale. */
+  function panel(height, title, max, ticks, below = 14, fixed = false) {
+    const top = cursor, y0 = top + 18, y1 = top + height, [step, cap] = !max ? [null, 1] : fixed ? [max / ticks, max] : nice(max, ticks);
+    cursor = y1 + below;
+    const y = (v) => y1 - v / cap * (y1 - y0);
+    g.append(svg('rect', { x: L, y: y0, width: Math.max(rise - L, 0), height: y1 - y0, fill: '#000', opacity: .22 }),
+      svg('rect', { x: set, y: y0, width: Math.max(W - R - set, 0), height: y1 - y0, fill: '#000', opacity: .22 }));
+    if (step) for (let v = 0; v <= cap; v += step) g.append(svg('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: GRID }),
+      svg('text', { x: L - 5, y: y(v) + 4, 'text-anchor': 'end' }, v));
+    g.append(svg('text', { x: L, y: top + 11, class: 'pt' }, W < 480 ? title.split(':')[0] : title));   // the short name on a phone
+    return { y, y0, y1 };
   }
-  for (const id of shown) for (const run of runs(d.source_hours[id] || []))
-    g.append(svg('polyline', { points: run.map(([i, v]) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' '), fill: 'none', stroke: SRC[id][1], 'stroke-width': 2, 'stroke-linejoin': 'round' }));
-  const tides = d.hours.map(h => h.tide), lo = Math.min(...tides.filter(v => v != null)), hi = Math.max(...tides.filter(v => v != null));
-  const ty = (v) => H - 22 - (v - lo) / ((hi - lo) || 1) * tideH;                                      // tide strip
-  for (const run of runs(tides)) g.append(svg('polyline', { points: run.map(([i, v]) => `${x(i).toFixed(1)},${ty(v).toFixed(1)}`).join(' '), fill: 'none', stroke: '#8c9ab0', 'stroke-width': 1.5 }));
-  g.append(svg('text', { x: L + 4, y: H - 22 - tideH - 3 }, `tide ${lo.toFixed(1)} to ${hi.toFixed(1)} ft`));
-  const now = d.hours.findIndex(h => h.t + 3600 > Date.now() / 1000);
-  if (now >= 0) g.append(svg('line', { x1: x(now), x2: x(now), y1: T, y2: H - 20, stroke: '#ffd60a', 'stroke-dasharray': '3 4' }));
-  const mark = svg('line', { y1: T, y2: H - 20, stroke: '#40c4ff', 'stroke-width': 2 });
+  const max = (f) => Math.max(1, ...H.map(f).filter(v => v != null));
+  const any = (f) => H.some(h => f(h) != null);
+  const hourLabel = (h) => { const hr = Number(h.time.slice(11, 13)); return hr === 0 ? '12a' : hr === 12 ? '12p' : hr < 12 ? `${hr}a` : `${hr - 12}p`; };
+
+  /* surface strip, then surf */
+  H.forEach((h, k) => { if (h.quality) g.append(svg('rect', { x: L + k * slot, y: 2, width: slot + .3, height: 6, fill: STRIP[h.quality] })); });
+  let top = max(h => h.surf_max);
+  for (const id of shown) index.forEach(i => { const v = (d.source_hours[id] || [])[i]; if (v > top) top = v; });
+  const surf = panel(196, 'Surf (ft): fused range, and each source', top, 5, 18);
+  for (const run of runs(H.map(h => h.surf_min == null ? null : [h.surf_min, h.surf_max]))) {
+    const up = run.map(([k, v]) => `${x(k).toFixed(1)},${surf.y(v[1]).toFixed(1)}`), down = run.map(([k, v]) => `${x(k).toFixed(1)},${surf.y(v[0]).toFixed(1)}`).reverse();
+    g.append(svg('polygon', { points: [...up, ...down].join(' '), fill: FUSED, opacity: .3 }));
+  }
+  for (const id of shown) g.append(...line(index.map(i => (d.source_hours[id] || [])[i]), surf.y, { stroke: SRC[id][1] }));
+  g.append(...line(H.map(h => h.surf_min == null ? null : (h.surf_min + h.surf_max) / 2), surf.y, { stroke: INK, 'stroke-width': 2.6 }));
+
+  if (any(h => h.wind)) {                                         /* wind: a bar an hour, gusts as ticks, where it blows underneath */
+    const wind = panel(92, 'Wind (kt): speed, gusts as ticks, and where it blows', max(h => h.wind && Math.max(h.wind.speed, h.wind.gust || 0)), 3, 28);
+    const bw = Math.max(slot - 2, 2);
+    H.forEach((h, k) => {
+      if (!h.wind) return;
+      const yv = wind.y(h.wind.speed), hgt = wind.y1 - yv, r = Math.min(3, bw / 2, hgt);
+      if (hgt > .3) g.append(svg('path', { fill: FUSED, d: `M${(x(k) - bw / 2).toFixed(1)},${wind.y1} v${-(hgt - r)} q0,${-r} ${r},${-r} h${(bw - 2 * r).toFixed(1)} q${r},0 ${r},${r} v${hgt - r} z` }));
+      if (h.wind.gust > h.wind.speed) g.append(svg('line', { x1: x(k) - bw / 2, x2: x(k) + bw / 2, y1: wind.y(h.wind.gust), y2: wind.y(h.wind.gust), stroke: MUTE, 'stroke-width': 1.5 }));
+      if (h.wind.dir != null && (slot >= 11 || k % 2 === 0)) g.append(glyph(x(k), wind.y1 + 12, h.wind.dir + 180, INK, slot >= 16 ? 6 : 4.5));
+      if (wide && k % 3 === 0) g.append(svg('text', { x: x(k), y: yv - 4, 'text-anchor': 'middle' }, h.wind.speed));
+    });
+  }
+  if (any(h => h.tide)) {                                         /* tide: the curve, with each high and low marked */
+    const tides = H.map(h => h.tide), known = tides.filter(v => v != null), lo = Math.min(0, ...known), hi = Math.max(1, ...known);
+    const tide = panel(86, 'Tide (ft): highs and lows', null, 0, 16);
+    const ty = (v) => tide.y1 - 14 - (v - lo) / (hi - lo) * (tide.y1 - tide.y0 - 30);
+    g.append(svg('line', { x1: L, x2: W - R, y1: ty(0), y2: ty(0), stroke: GRID }), svg('text', { x: L - 5, y: ty(0) + 4, 'text-anchor': 'end' }, '0'), ...line(tides, ty, { stroke: FUSED }));
+    (day.tides || []).forEach(e => { const px = Math.min(Math.max(xt(e.t), L + 26), W - R - 26);
+      g.append(svg('circle', { cx: xt(e.t), cy: ty(e.height), r: 3, fill: INK }),
+        svg('text', { x: px, y: ty(e.height) + (e.type === 'high' ? -7 : 15), 'text-anchor': 'middle' }, W >= 520 ? `${e.time} · ${e.height.toFixed(1)}` : e.height.toFixed(1))); });
+  }
+  if (any(h => h.swells)) {                                       /* swell at sea: the main train and, dashed, the second */
+    const swell = panel(98, 'Swell at sea (ft): main train, second dashed', max(h => h.swells && h.swells[0].height), 4, 16);
+    g.append(...line(H.map(h => h.swells && h.swells[1] ? h.swells[1].height : null), swell.y, { stroke: FUSED, 'stroke-dasharray': '5 4', opacity: .6 }),
+      ...line(H.map(h => h.swells ? h.swells[0].height : null), swell.y, { stroke: FUSED }));
+    H.forEach((h, k) => { if (k % 3 === 1 && h.swells) { g.append(glyph(x(k), swell.y(h.swells[0].height) - 10, h.swells[0].dir + 180, INK, 6));
+      if (h.swells[1]) g.append(glyph(x(k), swell.y(h.swells[1].height) - 9, h.swells[1].dir + 180, MUTE, 4.5)); } });
+  }
+  if (any(h => h.energy)) {                                       /* wave energy at the break (the open-sea figure is in the readout and table) */
+    const energy = panel(90, 'Wave energy at the break (kJ per wave)', max(h => h.energy && h.energy.nearshore), 3, 16);
+    g.append(...line(H.map(h => h.energy ? h.energy.nearshore : null), energy.y, { stroke: FUSED }));
+  }
+  if (any(h => h.consistency)) {                                  /* consistency, 0 to 100 */
+    const steady = panel(76, 'Consistency (0-100): how steadily waves arrive, our estimate', 100, 2, 16, true);
+    g.append(...line(H.map(h => h.consistency), steady.y, { stroke: FUSED }));
+  }
+  if (any(h => h.weather)) {                                      /* weather: sky and air temperature every three hours */
+    const wx = panel(46, 'Weather (°F)', null, 0, 10);
+    H.forEach((h, k) => { if (k % 3 === 0 && h.weather) g.append(skyIcon(x(k), wx.y0 + 10, h.weather), svg('text', { x: x(k), y: wx.y1 + 1, 'text-anchor': 'middle' }, h.weather.temp_f)); });
+  }
+
+  const bottom = cursor, total = bottom + 22;
+  g.setAttribute('viewBox', `0 0 ${W} ${total}`); g.setAttribute('width', W); g.setAttribute('height', total);
+  H.forEach((h, k) => { if (k % 3 === 0) g.append(svg('line', { x1: L + k * slot, x2: L + k * slot, y1: 12, y2: bottom, stroke: GRID, opacity: k ? .7 : 1 }),
+    svg('text', { x: x(k), y: total - 6, 'text-anchor': 'middle' }, hourLabel(h))); });
+  const now = H.findIndex(h => h.t <= Date.now() / 1000 && h.t + 3600 > Date.now() / 1000);
+  if (now >= 0) g.append(svg('line', { x1: x(now), x2: x(now), y1: 12, y2: bottom, stroke: '#ffd60a', 'stroke-dasharray': '3 4' }));
+  const mark = svg('line', { y1: 0, y2: bottom, stroke: INK, 'stroke-width': 1.5, opacity: .85 });
   g.append(mark);
-  const place = (i) => { mark.setAttribute('x1', x(i)); mark.setAttribute('x2', x(i)); };
+  const place = (i) => { const k = index.indexOf(i); mark.setAttribute('visibility', k < 0 ? 'hidden' : 'visible'); if (k >= 0) { mark.setAttribute('x1', x(k)); mark.setAttribute('x2', x(k)); } };
   place(sel);
-  const at = (e) => { const r = g.getBoundingClientRect(); return Math.round(Math.min(Math.max(((e.clientX - r.left) / r.width * W - L) / (W - L - R), 0), 1) * (n - 1)); };
-  g.addEventListener('pointerdown', (e) => { pick(at(e)); g.setPointerCapture(e.pointerId); });
-  g.addEventListener('pointermove', (e) => { if (e.buttons) pick(at(e)); });
+  const at = (e) => { const r = g.getBoundingClientRect(); return index[Math.min(Math.max(Math.floor(((e.clientX - r.left) / r.width * W - L) / slot), 0), n - 1)]; };
+  g.addEventListener('pointerdown', (e) => { pick(at(e)); if (e.pointerType !== 'touch') g.setPointerCapture(e.pointerId); });
+  g.addEventListener('pointermove', (e) => { if (e.pointerType === 'mouse' || e.buttons) pick(at(e)); });
   return { node: g, place };
 }
 
@@ -250,7 +334,8 @@ async function spotPage(id) {
   const spot = d.spot, hours = d.hours, ids = d.sources.filter(s => s.ok).map(s => s.id).filter(i => SRC[i]);
   document.title = `${spot.name} · surfslop`;
   const nowI = Math.max(hours.findIndex(h => h.t + 3600 > Date.now() / 1000 && h.surf_min != null), 0);
-  let sel = nowI, shown = new Set(ids), plot;
+  let sel = nowI, shown = new Set(ids), plot, plotDay = null;
+  const dayOf = (i) => hours[i].time.slice(0, 10);
 
   const sat = el('div', { class: 'sat' }, el('img', { src: `/v1/satellite/${spot.id}.jpg`, alt: `Satellite view of ${spot.name}`, loading: 'lazy' }));
   const cap = el('div', { class: 'cap' });
@@ -258,7 +343,11 @@ async function spotPage(id) {
   const range = el('input', { type: 'range', min: 0, max: hours.length - 1, step: 1, 'aria-label': 'Forecast hour' });
   const dayStrip = el('div', { class: 'days' });
   const detail = el('div', { class: 'detail' });
-  const plotBox = el('div', { class: 'scroll chart' });
+  const plotBox = el('div', { class: 'chart' });
+  const readout = el('div', { class: 'readout' }), hourTable = el('details', {}), dayName = el('span', {});
+  const step = (by) => { const k = d.days.findIndex(x => x.date === dayOf(sel)) + by; if (d.days[k]) setHour(hours.findIndex(h => h.time === `${d.days[k].date}T09:00`)); };
+  const dayNav = el('div', { class: 'daynav' }, el('button', { onclick: () => step(-1), 'aria-label': 'Previous day' }, '‹'), dayName,
+    el('button', { onclick: () => step(1), 'aria-label': 'Next day' }, '›'));
   const dayButtons = d.days.map(day => el('button', { class: 'day', 'aria-pressed': 'false', onclick: () => setHour(hours.findIndex(h => h.time === `${day.date}T09:00`)) },
     el('div', { class: 'dow' }, day.dow), el('div', { class: 'dt' }, `${Number(day.date.slice(5, 7))}/${Number(day.date.slice(8))}`),
     el('div', { class: 'ht' }, day.surf), el('div', { class: 'stars', title: `${day.stars} of 5` }, '★'.repeat(day.stars), el('i', {}, '★'.repeat(5 - day.stars))),
@@ -277,15 +366,42 @@ async function spotPage(id) {
       h.wind ? el('span', {}, `Wind ${windText(h.wind)}${h.wind.gust ? `, gusts ${h.wind.gust}` : ''}`) : null,
       h.tide != null ? el('span', {}, `Tide ${h.tide} ft`) : null);
     d.days.forEach((x, k) => dayButtons[k].setAttribute('aria-pressed', String(x === day)));
-    if (plot) plot.place(i);
+    if (plot && plotDay !== dayOf(i)) draw(); else if (plot) plot.place(i);
+    dayName.textContent = day ? day.label : dayOf(i);
+    const s0 = (h.swells || [])[0];
+    readout.replaceChildren(el('b', {}, hourFmt.format(new Date(h.t * 1000))),
+      ...[`${surfText(h.surf_min, h.surf_max)} ft`, s0 && `swell ${s0.height} ft @ ${s0.period} s ${s0.from}`, h.wind && `wind ${h.wind.speed} kt ${h.wind.from}, ${h.wind.type}`,
+        h.tide != null && `tide ${h.tide} ft`, h.energy && `energy ${h.energy.nearshore.toLocaleString('en-US')} kJ at the break (${h.energy.offshore.toLocaleString('en-US')} at sea)`, h.consistency != null && `consistency ${h.consistency}`,
+        h.weather && `${h.weather.temp_f}°F ${h.weather.sky}`].filter(Boolean).map(t => el('span', {}, t)));
+    const rows = hours.filter(x => x.time.slice(0, 10) === h.time.slice(0, 10) && Number(x.time.slice(11, 13)) % 3 === 0);
+    const cols = [['Time', x => fmt({ hour: 'numeric' }).format(new Date(x.t * 1000)), () => true],
+      ['Surf (ft)', x => surfText(x.surf_min, x.surf_max), x => x.surf_min != null],
+      ['Swell at sea', x => `${x.swells[0].height} ft @ ${x.swells[0].period} s ${x.swells[0].from}`, x => x.swells],
+      ['Wind', x => `${x.wind.speed} kt ${x.wind.from}`, x => x.wind], ['Tide (ft)', x => x.tide, x => x.tide != null],
+      ['Energy at the break (kJ)', x => x.energy.nearshore.toLocaleString('en-US'), x => x.energy],
+      ['Energy at sea (kJ)', x => x.energy.offshore.toLocaleString('en-US'), x => x.energy],
+      ['Consistency', x => x.consistency, x => x.consistency != null],
+      ['Weather', x => `${x.weather.temp_f}°F ${x.weather.sky}`, x => x.weather]].filter(c => rows.some(c[2]));
+    hourTable.replaceChildren(el('summary', {}, `Table: ${day ? day.label : h.time.slice(0, 10)}, every three hours`), el('div', { class: 'scroll' }, el('table', {},
+      el('thead', {}, el('tr', {}, cols.map(c => el('th', {}, c[0])))),
+      el('tbody', {}, rows.map(x => el('tr', {}, cols.map(c => el('td', {}, c[2](x) ? String(c[1](x)) : '–'))))))));
     if (day) detail.replaceChildren(
       ...PERIODS.map(([p, hrs]) => { const w = day.periods[p]; return el('div', {}, el('b', {}, `${p[0].toUpperCase()}${p.slice(1)} `), el('span', { class: 'muted' }, hrs), el('br'),
         w ? `${w.surf} ft · ${windText(w.wind)} ` : 'no data', w && w.quality ? el('span', { class: `badge ${w.quality}` }, w.quality) : null); }),
       el('div', {}, el('b', {}, 'Swell '), day.swell || 'n/a', day.caution ? el('span', { class: 'warn' }, ` · ${day.caution}`) : null, el('br'), el('b', {}, 'Best '), day.best || 'n/a', ' · ', el('span', { class: `badge ${day.confidence}` }, `${day.confidence} confidence`)),
-      el('div', {}, el('b', {}, `Tides (${d.tide_station}) `), el('br'), day.tides.map(t => `${t.type} ${t.time} ${t.height} ft`).join(' · ') || 'n/a'));
+      el('div', {}, el('b', {}, `Tides (${d.tide_station}) `), el('br'), day.tides.map(t => `${t.type} ${t.time} ${t.height} ft`).join(' · ') || 'n/a'),
+      el('div', {}, el('b', {}, 'Sun and weather '), el('br'), [day.sun && `sunrise ${day.sun.sunrise}, sunset ${day.sun.sunset}`,
+        day.weather && `${day.weather.low}-${day.weather.high}°F, ${day.weather.sky}`].filter(Boolean).join(' · ') || 'n/a'),
+      el('div', {}, el('b', {}, 'Energy and consistency '), el('br'), [day.energy != null && `${day.energy.toLocaleString('en-US')} kJ at the break`,
+        day.consistency != null && `consistency ${day.consistency} of 100`].filter(Boolean).join(' · ') || 'n/a'));
   }
   range.addEventListener('input', () => setHour(Number(range.value)));
-  const draw = () => { plot = chart(d, [...shown], sel, setHour); plotBox.replaceChildren(plot.node); };
+  const draw = () => {                                            // the panels for the selected hour's day
+    plotDay = dayOf(sel);
+    plot = chart(d, [...shown], hours.map((h, i) => i).filter(i => dayOf(i) === plotDay), sel, setHour, plotBox.clientWidth || 700);
+    plotBox.replaceChildren(plot.node);
+  };
+  window.onresize = () => { if (plot && document.body.contains(plotBox)) draw(); };
   const keys = el('div', { class: 'keys' }, el('label', {}, el('i', {}), 'Fused range'), ids.map(i => {
     const box = el('input', { type: 'checkbox', checked: '' });
     box.addEventListener('change', () => { box.checked ? shown.add(i) : shown.delete(i); draw(); });
@@ -313,7 +429,7 @@ async function spotPage(id) {
     el('h2', {}, 'The spot and the swell'), sat,
     el('div', { class: 'scrub' }, range, out, el('button', { onclick: () => setHour(nowI) }, 'Now')),
     el('h2', {}, 'The week'), el('div', { class: 'scroll' }, dayStrip), legend(), el('div', { class: 'card' }, detail),
-    el('h2', {}, 'Hour by hour: the fused forecast and each source'), el('div', { class: 'card' }, keys, plotBox),
+    el('h2', {}, 'Hour by hour, from the fused forecast'), el('div', { class: 'card' }, dayNav, readout, keys, plotBox, hourTable),
     el('h2', {}, 'Overview'), aiBox,
     el('h2', {}, 'What each source says'), el('div', { class: 'card scroll' }, sourceTable(d, ids)),
     el('h2', {}, 'Sources'), el('div', { class: 'card srcs' },

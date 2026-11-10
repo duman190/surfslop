@@ -6,7 +6,7 @@
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  padding: 0 max(16px, env(safe-area-inset-right)) 40px max(16px, env(safe-area-inset-left)); }
+  padding: env(safe-area-inset-top) max(16px, env(safe-area-inset-right)) calc(40px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 button { font: inherit; color: inherit; }
@@ -107,8 +107,18 @@ h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .08em; color: v
 .dot.high { background: var(--clean); } .dot.medium { background: var(--fair); } .dot.low { background: var(--blown); }
 .detail { display: grid; gap: 4px 18px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); font-size: 14px; margin-top: 12px; }
 .detail b { font-weight: 600; }
-.chart svg { width: 100%; min-width: 700px; height: auto; display: block; touch-action: pan-x; }
+.chart { overflow: hidden; }
+.chart svg { max-width: 100%; height: auto; display: block; touch-action: pan-y; }
 .chart text { fill: var(--muted); font-size: 11px; font-family: inherit; }
+.chart text.pt { fill: var(--ink); font-size: 12px; font-weight: 600; }
+.chart svg { cursor: crosshair; }
+.daynav { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-weight: 700; font-size: 17px; }
+.daynav button { border: 1px solid var(--line); background: var(--card2); border-radius: 999px; width: 32px; height: 32px; cursor: pointer; font-size: 18px; line-height: 1; }
+.daynav span { min-width: 104px; text-align: center; }
+.readout { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 14px; margin-bottom: 10px; font-variant-numeric: tabular-nums; min-height: 22px; }
+.readout span { color: var(--muted); }
+.card details { margin-top: 10px; font-size: 13px; }
+.card details summary { color: var(--muted); cursor: pointer; }
 .keys { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; margin-bottom: 8px; }
 .keys label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--muted); }
 .keys input { accent-color: var(--accent); margin: 0; }

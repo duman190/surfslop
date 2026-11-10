@@ -153,3 +153,66 @@ def test_spots_fused_at_once_all_keep_their_calibration():
     saved = json.loads(fusion._calibration_path().read_text())
     assert sorted(saved) == sorted(s.id for s in FEATURED) and all("nws" in entry for entry in saved.values())
     assert not list(config.home().glob("*.tmp"))
+
+
+def test_swell_trains_are_matched_by_direction_then_averaged():
+    wnw_a, wnw_b, south = (8.0, 14.0, 290.0), (10.0, 16.0, 300.0), (2.0, 15.0, 200.0)
+    trains = fusion.fuse_swells(LANE, [(1.5, [wnw_a, south]), (0.5, [south, wnw_b])])     # listed in different orders
+    assert trains[0] == {"height": 8.5, "period": 14.0, "dir": 292.0, "from": "WNW"}      # 8 and 10 at weights 1.5 and 0.5
+    assert trains[1] == {"height": 2.0, "period": 15.0, "dir": 200.0, "from": "SSW"}
+    assert fusion.fuse_swells(LANE, [(1.0, [wnw_a, (0.3, 9.0, 200.0)])]) == [trains[0] | {"height": 8.0, "dir": 290.0}]   # a ripple is not a train
+    assert fusion.fuse_swells(LANE, []) == []
+
+
+def test_every_hour_carries_swell_energy_consistency_weather_and_the_day_its_sun():
+    t0 = midnight()
+    weather = {"hours": {t0 + i * 3600: (55.0 + i % 24, 2 if 6 <= i % 24 < 18 else 0, 6 <= i % 24 < 18) for i in range(72)},
+               "sun": [(t0 + 6 * 3600 + 40 * 60, t0 + 17 * 3600 + 120)]}
+    wind = (8.0, 12.0, LANE.offshore)
+    data = fusion.fuse(LANE, [spot_source("surfline", 4, 6), ocean_source("nws", 6, 14, 300),
+                              ocean_source("openmeteo-ncep", 8, 14, 300, wind=wind, group="openmeteo")], tides=[], stored={}, weather=weather)
+    hour = data["hours"][12]
+    assert hour["swells"] == [{"height": 6.7, "period": 14.0, "dir": 300.0, "from": "WNW"}]   # NWS 6 (1.5) and GFS 8 (0.8); not Surfline
+    at_sea = surf.wave_energy(6.7, 14)
+    assert hour["energy"]["offshore"] == round(at_sea) and 0 < hour["energy"]["nearshore"] < hour["energy"]["offshore"]
+    mid = (hour["surf_min"] + hour["surf_max"]) / 2
+    assert hour["consistency"] == surf.consistency(mid, 14.0)
+    assert hour["weather"] == {"temp_f": 67, "sky": "partly cloudy", "night": False} and data["hours"][2]["weather"]["night"]
+    assert hour["wind"]["type"] == "offshore" and "weather" not in data["hours"][100]         # past the weather forecast: left out
+    day = data["days"][0]
+    assert day["sun"]["sunrise"] == "6:40am" and day["sun"]["sunset"] == "5:02pm"
+    assert day["weather"] == {"low": 55, "high": 78, "sky": "partly cloudy"}
+    assert day["consistency"] == hour["consistency"] and day["energy"] == hour["energy"]["nearshore"]
+    plain = fusion.fuse(LANE, [ocean_source("nws", 6, 14, 300)], tides=[], stored={})          # no weather given
+    assert "weather" not in plain["hours"][12] and plain["days"][0]["weather"] is None and plain["days"][0]["sun"] is None
+    data.update(tide_station="Santa Cruz", buoys=[], off=[], now=hour)
+    md = text.forecast_md(data)
+    assert "## Hour by hour, next 48 hours" in md and "6.7 ft @ 14 s WNW" in md and "67°F partly cloudy" in md
+    assert f"{hour['energy']['nearshore']} / {hour['energy']['offshore']}" in md and "Sunrise 6:40am, sunset 5:02pm." in md
+
+
+def test_surf_forecast_is_never_scaled_to_surfline():
+    stored = {}
+    data = fusion.fuse(LANE, [spot_source("surfline", 6, 8), spot_source("surfforecast", 2, 3), ocean_source("nws", 6, 14, 300)],
+                       tides=[], stored=stored)
+    assert set(stored["steamer-lane"]) == {"nws"}                              # only the open-ocean source is tuned
+    assert data["days"][0]["by_source"]["surfforecast"]["surf"] == "2-3"        # its own opinion, as it gave it
+    stored["steamer-lane"]["surfforecast"] = {"scale": 2.4}                     # a scale saved by an older version is ignored
+    again = fusion.fuse(LANE, [spot_source("surfforecast", 2, 3)], tides=[], stored=stored)
+    assert again["days"][0]["by_source"]["surfforecast"]["surf"] == "2-3"
+
+
+def test_the_saved_edition_stands_in_when_no_source_answers(monkeypatch):
+    from surfslop.sources import nws as nws_source
+    data = fusion.fuse(LANE, [ocean_source("nws", 6, 14, 300)], tides=[], stored={})
+    data.update(tide_station="Santa Cruz", buoys=[], off=[], now=data["hours"][12], public=False)
+    fusion.save_edition(data)
+    assert fusion.load_edition(LANE)["days"][0]["surf"] == data["days"][0]["surf"] and fusion.load_edition(LANE, public=True) is None
+    cfg = config.load()                                    # offline (conftest): every source fails
+    served = fusion.forecast(LANE, cfg)
+    assert served["edition"] and served["days"][0]["surf"] == data["days"][0]["surf"] and len(served["hours"]) == len(data["hours"])
+    old = fusion.json.loads(fusion._edition_path(LANE, False).read_text())
+    old["edition"] -= 40 * 3600
+    fusion._edition_path(LANE, False).write_text(fusion.json.dumps(old))
+    fusion._cache.clear()
+    assert fusion.forecast(LANE, cfg)["days"] == []        # too old to show as today's

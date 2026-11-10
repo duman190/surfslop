@@ -7,13 +7,19 @@ spot's exposure. Then, hour by hour:
   surf     weighted mean of the sources (WEIGHTS), with the sources' disagreement kept as
            `spread`; a day's `confidence` comes from the spread and how many independent
            source families agree.
-  swell    the dominant train of the most trusted source that has one (for the map's arrow).
+  swell    the sources' swell trains, matched by direction and averaged with the same weights:
+           the main train and, when there is one, a second (for the map's arrows and the chart).
+  energy   kJ per metre of crest in one wave of that swell, out at sea and at the break.
+  consistency  0-100, our estimate of how steadily rideable waves arrive (surf.consistency).
   wind     weighted circular mean of the spot-level winds → offshore/onshore → clean/fair/blown.
   tide     NOAA's prediction for the region's station.
+  weather  air temperature and sky at the spot (Open-Meteo), with sunrise and sunset per day.
 
-Calibration: while Surfline is on, each other source is compared with it over the hours both
+Calibration: while Surfline is on, each open-ocean source is compared with it over the hours both
 cover, and the median ratio is remembered per spot (calibration.json). That scale is applied to
-the source from then on, including days 6-8 where Surfline's free forecast has ended.
+the source from then on, including days 6-8 where Surfline's free forecast has ended. It corrects
+how this portal brings open-ocean swell to the break; surf-forecast.com forecasts the break
+itself, so its numbers are left as they are.
 """
 
 from __future__ import annotations
@@ -30,10 +36,17 @@ from zoneinfo import ZoneInfo
 
 from . import config, obs, surf
 from .sources import nws, openmeteo, surfforecast, surfline
-from .spots import FEATURED, REGIONS, TZ, Spot, public
+from .spots import BY_ID, FEATURED, REGIONS, TZ, Spot, public
 
 WEIGHTS = {"surfline": 3.0, "nws": 1.5, "surfforecast": 0.8, "openmeteo": 0.8}
-SWELL_ORDER = ("surfline", "nws", "openmeteo-ncep", "openmeteo-meteofrance", "openmeteo-ecmwf", "surfforecast")
+# Whose swell trains are fused into the open-ocean swell, most trusted first: the sources that
+# forecast the open sea. Surfline gives its swell at an inshore point of its own for each spot, and
+# surf-forecast.com's is already cut down to what reaches the break, so those two count through
+# their surf heights instead and only stand in here when no open-sea source has a swell.
+SWELL_SOURCES = ("nws", "openmeteo-ncep", "openmeteo-meteofrance", "openmeteo-ecmwf")
+SWELL_STANDINS = ("surfline", "surfforecast")
+SAME_TRAIN = 50  # degrees: trains from two sources this close in direction are the same swell
+EDITION_KEEP = 36 * 3600
 WIND_WEIGHTS = (("surfline", 2.0), ("openmeteo-ncep", 1.0), ("openmeteo-meteofrance", 1.0),
                 ("openmeteo-ecmwf", 1.0), ("surfforecast", 0.7))
 DAYS = 8
@@ -122,9 +135,11 @@ def load_calibration() -> dict:
 _calibration_lock = threading.Lock()
 
 
-def calibrate(spot_id: str, series: dict, hours: list, stored: dict) -> dict:
-    """{source: scale} for this spot; updates `stored` in place when Surfline gives new evidence."""
-    scales = {sid: entry["scale"] for sid, entry in stored.get(spot_id, {}).items()}
+def calibrate(spot_id: str, series: dict, hours: list, stored: dict, skip=()) -> dict:
+    """{source: scale} for this spot; updates `stored` in place when Surfline gives new evidence.
+    Sources in `skip` (those that forecast the break themselves) are never scaled."""
+    series = {sid: s for sid, s in series.items() if sid not in skip}
+    scales = {sid: entry["scale"] for sid, entry in stored.get(spot_id, {}).items() if sid not in skip}
     ref = series.get("surfline")
     if not ref:
         return scales
@@ -165,20 +180,54 @@ def _r(x, digits=1):
     return None if x is None else round(x, digits)
 
 
-def _swell(spot: Spot, swells) -> list:
-    ranked = sorted((s for s in swells if s[0] and s[1]),
-                    key=lambda s: -surf.breaking_height(s[0], s[1]) * surf.exposure(spot.exposure, s[2]))
-    return [{"height": _r(h), "period": _r(p, 0), "dir": _r(d, 0), "from": surf.compass(d)} for h, p, d in ranked[:2]]
+def _ranked(spot: Spot, trains) -> list:
+    """A source's swell trains, the one that matters most at this spot first."""
+    return sorted((s for s in trains if s[0] and s[1]),
+                  key=lambda s: -surf.breaking_height(s[0], s[1]) * surf.exposure(spot.exposure, s[2]))[:3]
 
 
-def fuse(spot: Spot, results: list, tides: list, now: float | None = None, stored: dict | None = None) -> dict:
+def fuse_swells(spot: Spot, found: list) -> list:
+    """The main swell train and, if there is one, a second, from several sources' trains.
+    `found` is [(weight, [(height_ft, period_s, from_deg), …])], most trusted source first. Trains
+    are matched across sources by direction, then height and period are weighted means and the
+    direction a weighted circular mean."""
+    found = [(w, _ranked(spot, trains)) for w, trains in found]
+    found = [(w, trains) for w, trains in found if trains]
+    used = [set() for _ in found]
+    out = []
+    for rank in range(2):
+        ref = next((trains[j] for (_, trains), u in zip(found, used) for j in range(len(trains)) if j not in u), None)
+        if ref is None:
+            break
+        members = []
+        for k, (w, trains) in enumerate(found):
+            free = [j for j in range(len(trains)) if j not in used[k]
+                    and (ref[2] is None or trains[j][2] is None or surf.angle_between(trains[j][2], ref[2]) <= SAME_TRAIN)]
+            if free:
+                best = min(free, key=lambda j: surf.angle_between(trains[j][2], ref[2]) if None not in (trains[j][2], ref[2]) else 0)
+                used[k].add(best)
+                members.append((w, trains[best]))
+        total = sum(w for w, _ in members)
+        height = sum(w * s[0] for w, s in members) / total
+        period = sum(w * s[1] for w, s in members) / total
+        direction = surf.mean_direction([(s[2], w) for w, s in members if s[2] is not None])
+        if rank and height < 0.5:
+            break
+        out.append({"height": _r(height), "period": _r(period, 0), "dir": _r(direction, 0), "from": surf.compass(direction)})
+    return out
+
+
+def fuse(spot: Spot, results: list, tides: list, now: float | None = None, stored: dict | None = None,
+         weather: dict | None = None) -> dict:
     now = now or time.time()
+    weather = weather or {"hours": {}, "sun": []}
     hours = _grid(now)
     ok = [r for r in results if r["points"]]
     raw = {r["id"]: Series((p["t"], _raw_surf(spot, r, p)) for p in r["points"]) for r in ok}
     swells = {r["id"]: Series((p["t"], tuple(p["swells"]) if p.get("swells") else None) for p in r["points"]) for r in ok}
     winds = {r["id"]: Series((p["t"], p.get("wind")) for p in r["points"]) for r in ok}
-    scales = calibrate(spot.id, raw, hours, load_calibration() if stored is None else stored)
+    scales = calibrate(spot.id, raw, hours, load_calibration() if stored is None else stored,
+                       skip={r["id"] for r in ok if r["kind"] == "spot" and r["id"] != "surfline"})
     weights = {r["id"]: WEIGHTS.get(r["group"], 0.5) for r in ok}
     groups = {r["id"]: r["group"] for r in ok}
 
@@ -199,11 +248,25 @@ def fuse(spot: Spot, results: list, tides: list, now: float | None = None, store
             var = sum(w * ((a + b) / 2 - mid) ** 2 for w, a, b, _ in votes) / total
             entry.update(surf_min=_r(lo), surf_max=_r(hi), spread=_r(var ** 0.5 / mid, 2) if mid > 0.75 else 0.0,
                          families=len({groups[sid] for *_, sid in votes}))
-        for sid in SWELL_ORDER:
-            trains = swells[sid].near(t) if sid in swells else None
-            if trains:
-                entry["swells"] = _swell(spot, trains)
-                break
+        found = [(weights[sid], swells[sid].near(t)) for sid in SWELL_SOURCES if sid in swells]
+        found = [(w, trains) for w, trains in found if trains]
+        if not found:
+            found = [(1.0, swells[sid].near(t)) for sid in SWELL_STANDINS if sid in swells and swells[sid].near(t)][:1]
+        trains = fuse_swells(spot, found)
+        if trains:
+            entry["swells"] = trains
+            each = [surf.wave_energy(s["height"], s["period"]) for s in trains]
+            offshore = sum(each)
+            mid = (entry["surf_min"] + entry["surf_max"]) / 2 if votes else None
+            # How much of the open-ocean wave arrives: the fused surf against the same swell on an open beach.
+            open_face = surf.face_height((1, 1, 1), [(s["height"], s["period"], s["dir"]) for s in trains])
+            share = (mid / open_face if mid is not None and open_face > 0
+                     else surf.exposure(spot.exposure, trains[0]["dir"]))
+            entry["energy"] = {"offshore": int(round(offshore)), "nearshore": int(round(offshore * min(share, 1.5) ** 2))}
+            entry["consistency"] = surf.consistency(mid, trains[0]["period"], each[1] / offshore if len(each) > 1 and offshore else 0.0)
+        sky = weather["hours"].get(t)
+        if sky:
+            entry["weather"] = {"temp_f": int(round(sky[0])), "sky": surf.sky(sky[1]), "night": not sky[2]}
         blow = [(w, winds[sid].near(t, within=3 * HOUR)) for sid, w in WIND_WEIGHTS if sid in winds]
         blow = [(w, v) for w, v in blow if v and v[0] is not None and v[2] is not None]
         if blow:
@@ -226,7 +289,7 @@ def fuse(spot: Spot, results: list, tides: list, now: float | None = None, store
     return {
         "spot": public(spot), "generated": int(now), "timezone": TZ,
         "sources": _source_status(results, scales, weights),
-        "days": _days(spot, hours, hourly, ok, raw, scales, tides),
+        "days": _days(spot, hours, hourly, ok, raw, scales, tides, weather["sun"]),
         "hours": hourly,
         "source_hours": per_source,
         "writeups": [{"source": r["label"], "day": w["day"], "text": w["text"]} for r in ok for w in r.get("writeups", [])],
@@ -274,7 +337,9 @@ def _clock(t: float) -> str:
     return datetime.fromtimestamp(t, ZoneInfo(TZ)).strftime("%-I:%M%p").lower()
 
 
-def _days(spot: Spot, hours: list, hourly: list, ok: list, raw: dict, scales: dict, tides: list) -> list:
+def _days(spot: Spot, hours: list, hourly: list, ok: list, raw: dict, scales: dict, tides: list, sun=()) -> list:
+    tz = ZoneInfo(TZ)
+    suns = {datetime.fromtimestamp(rise, tz).strftime("%Y-%m-%d"): (rise, down) for rise, down in sun}
     by_date: dict = {}
     for (t, local), entry in zip(hours, hourly):
         by_date.setdefault(local.strftime("%Y-%m-%d"), []).append((local, entry))
@@ -321,6 +386,15 @@ def _days(spot: Spot, hours: list, hourly: list, ok: list, raw: dict, scales: di
                                          "note": r["notes"].get(date)}
         day["tides"] = [{"t": t, "time": _clock(t), "type": "high" if kind == "H" else "low", "height": _r(h)}
                         for t, h, kind in tides if rows[0][1]["t"] <= t < rows[0][1]["t"] + 24 * HOUR]
+        energy = _mean((e.get("energy") or {}).get("nearshore") for e in light)
+        day["energy"] = int(round(energy)) if energy is not None else None
+        steady = _mean(e.get("consistency") for e in light)
+        day["consistency"] = int(round(steady)) if steady is not None else None
+        temps = [e["weather"]["temp_f"] for _, e in rows if e.get("weather")]
+        skies = Counter(e["weather"]["sky"] for e in light if e.get("weather"))
+        day["weather"] = {"low": min(temps), "high": max(temps), "sky": skies.most_common(1)[0][0] if skies else ""} if temps else None
+        rise, down = suns.get(date, (None, None))
+        day["sun"] = {"sunrise": _clock(rise), "sunset": _clock(down), "sunrise_t": rise, "sunset_t": down} if rise else None
         days.append(day)
     return days
 
@@ -340,7 +414,11 @@ def forecast(spot: Spot, cfg: config.Config | None = None, refresh: bool = False
             return hit[1]
         region = REGIONS[spot.region]
         tides = obs.tide_extremes(region.tide_station)
-        data = fuse(spot, gather(spot, cfg, public), tides)
+        data = fuse(spot, gather(spot, cfg, public), tides, weather=openmeteo.spot_weather(spot))
+        if not data["days"]:  # every source is unreachable: fall back on this morning's edition
+            saved = load_edition(spot, public)
+            if saved:
+                return saved
         data["tide_station"] = region.tide_name
         data["buoys"] = [b for b in (obs.buoy(s) for s in region.buoys) if b]
         data["off"] = [] if public else [s for s in config.SOURCES if not cfg.enabled(s)]
@@ -351,6 +429,25 @@ def forecast(spot: Spot, cfg: config.Config | None = None, refresh: bool = False
                 source["scale"] = None  # how the open sources were tuned stays private
         _cache[key] = (time.time() + FRESH, data, tuple(cfg.disabled))
         return data
+
+
+def _edition_path(spot: Spot, public: bool):
+    return config.cache_dir("edition") / f"{'pub-' if public else ''}{spot.id}.json"
+
+
+def save_edition(data: dict) -> None:
+    """Keep a spot's whole fused forecast, hour by hour, as the daily edition built it."""
+    spot = BY_ID[data["spot"]["id"]]
+    config.write_private(_edition_path(spot, bool(data.get("public"))), json.dumps({**data, "edition": int(time.time())}))
+
+
+def load_edition(spot: Spot, public: bool = False) -> dict | None:
+    """The spot's forecast from the last daily edition, if it is recent enough to show."""
+    try:
+        data = json.loads(_edition_path(spot, public).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if time.time() - data.get("edition", 0) < EDITION_KEEP else None
 
 
 def forget(spot: Spot) -> None:

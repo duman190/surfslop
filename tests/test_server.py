@@ -100,3 +100,15 @@ def test_requests_with_a_body_are_refused_and_the_connection_closed(portal):
     assert posted.value.code == 405 and posted.value.headers["Allow"] == "GET, HEAD" and posted.value.headers["Connection"] == "close"
     status, headers, _ = fetch(portal + "/v1/spots")
     assert status == 200 and headers["Cross-Origin-Resource-Policy"] == "same-origin" and "Strict-Transport-Security" not in headers
+
+
+def test_home_screen_icon_and_manifest(portal):
+    page = fetch(portal + "/")[2].decode()
+    assert 'rel="apple-touch-icon" href="/static/apple-touch-icon.png"' in page and 'rel="manifest"' in page
+    for path in ("/static/apple-touch-icon.png", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png", "/static/icon-512.png", "/favicon.ico"):
+        status, headers, body = fetch(portal + path)
+        assert status == 200 and headers["Content-Type"] == "image/png" and body[:8] == b"\x89PNG\r\n\x1a\n", path
+    status, headers, body = fetch(portal + "/static/manifest.webmanifest")
+    manifest = json.loads(body)
+    assert status == 200 and headers["Content-Type"].startswith("application/manifest+json")
+    assert manifest["display"] == "standalone" and {i["sizes"] for i in manifest["icons"]} == {"192x192", "512x512"}

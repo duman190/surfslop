@@ -10,6 +10,7 @@ import math
 
 FT = 0.3048
 G = 9.81
+RHO = 1025.0  # sea water, kg/m³
 COMPASS = ("N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW")
 
 
@@ -112,6 +113,38 @@ def quality(direction: float | None, speed: float | None, offshore: float) -> st
         return ""
     clean, fair = _LIMITS[kind]
     return "clean" if speed <= clean else "fair" if speed <= fair else "blown"
+
+
+def wave_energy(height_ft: float | None, period_s: float | None) -> float:
+    """Energy of one wave of a swell train, in kJ per metre of crest: the energy under a metre-wide
+    strip one wavelength long, ρ g² H² T² / 16π (deep water). A 6 ft @ 14 s swell carries about
+    1,200 kJ; twice the height is four times the energy, and so is twice the period."""
+    if not height_ft or not period_s or height_ft <= 0 or period_s <= 0:
+        return 0.0
+    h = height_ft * FT
+    return RHO * G * G * h * h * period_s * period_s / (16 * math.pi) / 1000
+
+
+def consistency(face_ft: float | None, period_s: float | None, second_share: float = 0.0) -> int | None:
+    """0-100: how steadily rideable waves arrive. Our own estimate, in the spirit of Surfline's
+    "consistency", not its number. Bigger surf means more of each set is rideable; a long-period
+    swell comes in sets with long lulls; a second swell train fills some of the lulls."""
+    if face_ft is None or not period_s:
+        return None
+    size = 1 - math.exp(-max(face_ft, 0) / 3.0)                      # 1 ft 28%, 3 ft 63%, 6 ft 86%
+    lulls = 1 - 0.25 * min(max((period_s - 12) / 6, 0), 1)           # 12 s and under 100%, 18 s and over 75%
+    return int(round(100 * min(1.0, size * lulls + 0.08 * min(second_share / 0.25, 1))))
+
+
+# WMO weather codes (Open-Meteo) → a word the page has a picture for.
+_SKY = ((0, "clear"), (1, "mostly clear"), (2, "partly cloudy"), (3, "cloudy"), (48, "fog"), (57, "drizzle"),
+        (67, "rain"), (77, "snow"), (82, "showers"), (86, "snow"), (99, "thunder"))
+
+
+def sky(code: float | None) -> str:
+    if code is None:
+        return ""
+    return next((word for top, word in _SKY if code <= top), "cloudy")
 
 
 def caution(lo: float | None, hi: float | None) -> str:
