@@ -150,25 +150,6 @@ access, and its site turns most non-browser clients away. Reading the signed-out
 for your own private page is a small thing, but it is their service and their rules, so the
 switch is yours, and the portal works without it.
 
-### Your Surfline account and password
-
-**surfslop does not use them, and you should not put them anywhere.** A free account
-shows the same five days as being signed out, so signing in would add nothing. Days 6-16
-need Surfline Premium.
-
-If that changes one day, the safe pattern is the one telegram4muse uses, not an environment
-variable:
-
-- **Sign in once, yourself, in Terminal.** The program asks with a hidden prompt, trades the
-  password for a session token, and forgets the password. Nobody else (not an agent, not a
-  chat) ever sees it.
-- **Keep only the token, in the macOS Keychain.** It is encrypted with your login, can be
-  revoked by signing out, and expires by itself. A password in `.env` or `~/.zshrc` is plain
-  text that every program you run can read, that leaks into shell history, backups and
-  crash reports, and that never expires.
-- **Agents get forecasts, never credentials.** The API here is read-only and has nothing
-  secret to give away.
-
 ## Agents (Muse)
 
 ```sh
